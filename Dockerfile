@@ -14,6 +14,7 @@ ENV LD_LIBRARY_PATH /usr/local/lib
 
 RUN pip install ipython
 RUN pip install pytest
+RUN pip install simple-pid
 
 COPY module_bindings /usr/local/src_py/module_bindings
 COPY dripline /usr/local/src_py/dripline
