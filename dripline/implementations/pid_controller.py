@@ -151,7 +151,9 @@ class PidController(AlertConsumer):
 
         con = Interface(connection)
         value = con.get(self._check_channel).payload[self.payload_field].as_string()
+
         logger.info('old current is {}'.format(value))
+
 
         try:
             value = float(value)
@@ -314,7 +316,9 @@ class PidController(AlertConsumer):
         }
 
         con = Interface(connection)
+
         value = con.get(self._status_channel).payload["value_raw"].as_string()
+
         logger.info("{} returns {}".format(self._status_channel,value))
         if value == "ON":
             logger.debug("{} returns {}".format(self._status_channel,value))
