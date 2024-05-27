@@ -1,19 +1,20 @@
 '''
-Implementation of a PID control loop
+Implementation of a PID control loop for a TCP server as a workaround
 '''
 
 from __future__ import print_function
 __all__ = []
-
 import time
 import datetime
 from simple_pid import PID
-# from dripline.core import AlertConsumer
-# from dripline.core import Interface
-# from dripline.core import ThrowReply 
+import connection as con
+import json
+
 
 import logging
 logger = logging.getLogger(__name__)
+if not logger.hasHandlers():
+    logger.addHandler(logging.StreamHandler())
 
 __all__.append('PidController')
 class PidController():
@@ -36,10 +37,6 @@ class PidController():
     '''
 
     def __init__(self,
-                 input_channel,
-                 output_channel,
-                 check_channel,
-                 status_channel,
                  payload_field='value_raw',
                  tolerance = 0.01,
                  target_value=0,
@@ -70,12 +67,11 @@ class PidController():
         tolerance (float): acceptable difference between the set and get values (default: 0.01)
         minimum_elapsed_time (float): minimum time interval to perform PID calculation over
         '''
-        kwargs.update({'alert_keys':['sensor_value.'+input_channel]})
-        AlertConsumer.__init__(self, **kwargs)
+        #kwargs.update({'alert_keys':['sensor_value.'+input_channel]})
 
-        self._set_channel = output_channel
-        self._check_channel = check_channel
-        self._status_channel = status_channel
+        #self._set_channel = output_channel
+        #self._check_channel = check_channel
+        #self._status_channel = status_channel
         self.payload_field = payload_field
         self.tolerance = tolerance
 
@@ -141,147 +137,50 @@ class PidController():
             logger.critical('self.auto_mode value {} is neither true nor false'.format(self.pid_auto_mode))
 
     def __get_current(self): #TODO: Remove hardcoded broker information
-        connection={
-            "broker": "rabbit-broker",
-            "auth-file": "/root/authentications.json"
-        }
-
-        con = Interface(connection)
-        value = con.get(self._check_channel).payload[self.payload_field].as_string()
-
-        logger.info('old current is {}'.format(value))
-
+        value = con.get("habs_current_output_dl3")
 
         try:
             value = float(value)
-            
-        except Exception as err: ##TODO correct exceptions
-            raise ThrowReply('value get ({}) is not floatable'.format(value))    
+        except Exception as err: 
+            raise ValueError('value get ({}) is not floatable'.format(value))    
         return value
 
     def __validate_status(self):
-        connection={
-            "broker": "rabbit-broker",
-            "auth-file": "/root/authentications.json"
-        }
+        value = con.get("habs_power_status_dl3")
 
-        con = Interface(connection)
-
-        value = con.get(self._status_channel).payload["value_raw"].as_string()
-
-        logger.info("{} returns {}".format(self._status_channel,value))
-        if value == "ON":
-            logger.debug("{} returns {}".format(self._status_channel,value))
+        if value.startswith("ON"):
+            logger.debug("{} returns {}".format("habs_power_status",value))
         else:
-            logger.critical("Invalid status of {} for PID control by {}".format(self._status_channel,self.name))
-       #     raise ThrowReply("{} returns {}".format(self._status_channel,value))
+            logger.critical("Invalid status of {} for PID control by {}".format("habs_power_status",self.name))
 
-  # dripline utilities
-
-    # @property
-    # def target_value(self):
-    #     return self._target_value
-    # @target_value.setter
-    # def target_value(self, value):
-    #     self._target_value = value
-    #     self._integral = 0
-    #     self._force_reprocess = True
-
-    # @property
-    # def pid_auto_mode(self):
-    #     return self._pid_auto_mode
-    # @pid_auto_mode.setter
-    # def pid_auto_mode(self, value):
-    #     self._pid_auto_mode = value
-    #     #self._force_reprocess = True
-
-    # @property
-    # def Kproportional(self):
-    #     return self._Kproportional
-    # @Kproportional.setter
-    # def Kproportional(self, value):
-    #     self._Kproportional = value
-
-    # @property
-    # def Kintegral(self):
-    #     return self._Kintegral
-    # @Kintegral.setter
-    # def Kintegral(self, value):
-    #     self._Kintegral = value
-
-    # @property
-    # def Kdifferential(self):
-    #     return self._Kdifferential
-    # @Kdifferential.setter
-    # def Kdifferential(self, value):
-    #     self._Kdifferential = value
-
-    # @property
-    # def p_term(self):
-    #     return self._p_term
-    # @p_term.setter
-    # def p_term(self, value):
-    #     self._p_term = value
-
-    # @property
-    # def i_term(self):
-    #     return self._i_term
-    # @i_term.setter
-    # def i_term(self, value):
-    #     self._i_term = value
-
-    # @property
-    # def d_term(self):
-    #     return self._d_term
-    # @d_term.setter
-    # def d_term(self, value):
-    #     self._d_term = value
-
-    # @property
-    # def change_to_current(self):
-    #     return self._change_to_current
-    # @change_to_current.setter
-    # def change_to_current(self, value):
-    #     self._change_to_current = value
 
     def set_current(self, value):
         logger.info('going to set new current to: {}'.format(value))
-        reply = self.service.set(self._set_channel, value)
+        reply = con.set("habs_current_limit_dl3", value)
         logger.info('set response was: {}'.format(reply))
 
-    # These functions broadcast their values to the dripline exchange in
-    # a way that allows those values to go into the database without locking
-    # up the pid_loop thread by trying to send and recieve the same message
-    # at the same time.
-    def send_p_term_to_db(self, value):
-        logger.info('going to send new p_term to DB: {}'.format(value))
-        values = {'value_raw': value, 'value_cal': value}
-        #reply = self.store_value(alert=values, severity='sensor_value.p_term')
-        #logger.info('set response was: {}'.format(reply))
+    def read_setpoint_from_file(self):
+        with open("pid_setpoint.txt", "r") as f:
+            setpoint = float(f.readlines()[0])
+        return setpoint
 
-    def send_i_term_to_db(self, value):
-        logger.info('going to send new i_term to DB: {}'.format(value))
-        values = {'value_raw': value, 'value_cal': value}
-        #reply = self.store_value(alert=values, severity='sensor_value.i_term')
-        #logger.info('set response was: {}'.format(reply))
-
-    def send_d_term_to_db(self, value):
-        logger.info('going to send new d_term to DB: {}'.format(value))
-        values = {'value_raw': value, 'value_cal': value}
-        #reply = self.store_value(alert=values, severity='sensor_value.d_term')
-        #logger.info('set response was: {}'.format(reply))
-
-    def send_change_to_current_to_db(self, value):
-        logger.info('going to send new change_to_current to DB: {}'.format(value))
-        values = {'value_raw': value, 'value_cal': value}
-        #reply = self.store_value(alert=values, severity='sensor_value.change_to_current')
-        #logger.info('set response was: {}'.format(reply))
-
-    def send_pid_auto_mode_to_db(self, value):
-        logger.info('going to send new pid_auto_mode to DB: {}'.format(value))
-        values = {'value_raw': value, 'value_cal': value}
-        #reply = self.store_value(alert=values, severity='sensor_value.pid_auto_mode')
-        #logger.info('set response was: {}'.format(reply))
+    def write_values_to_file(self):
+        values = {
+            'habs_current_limit_dl3': con.get("habs_current_limit_dl3"),
+            'thermocouple_temp': con.get("read_V_TC_HABS_Source_MATS_dl3"),
+            'power_status': con.get("habs_power_status_dl3"),
+            'pid_auto_mode': self.pid_auto_mode,
+            'pid_setpoint': self.pid.setpoint,
+            'change_to_current': self.change_to_current,
+            'Kproportional': self.Kproportional,
+            'Kintegral': self.Kintegral,
+            'Kdifferential': self.Kdifferential,
+            'p_term': self.p_term,
+            'i_term': self.i_term,
+            'd_term': self.d_term,
+        }
+        with open("pid_temporary_values.json", "w") as f:
+            json.dump(values, f)
     
     # This was conjured up by Max and Darius as a way to gain access to the PID coefficients for tuning
     def send_pid_coefficients_to_log(self, *value):
@@ -325,14 +224,9 @@ class PidController():
     # Respond to a new message on the exchange from the sensor endpoint
     # Because this file is a Gogol, the appearance of the message
     # is the trigger for computing a new PID output value
-    def on_alert_message(self, message):
-        logger.info('consuming message {}'.format(message))
-        this_value = message.payload[self.payload_field].as_double()
-        if this_value is None:
-            logger.info('value is None')
-            return
+    def on_alert_message(self):
 
-
+        this_value = self.read_setpoint_from_file()# float(con.get("read_V_TC_HABS_Source_MATS_dl3"))
 
         # if this is the first run after starting the service
         # and the sensor reading (this_value) is more than 1 [TC unit] different from the target_value
@@ -346,9 +240,7 @@ class PidController():
                 # send setpoint to simple-pid
                 self.pid.setpoint = self.target_value
 
-
-
-        this_time = datetime.datetime.strptime(message.timestamp, '%Y-%m-%dT%H:%M:%S.%fZ')
+        this_time = datetime.datetime.utcnow()
         if (this_time - self._last_data['time']).total_seconds() < self.minimum_elapsed_time:
             # handle self._force_reprocess from @target_value.setter
             if not self._force_reprocess:
@@ -356,7 +248,7 @@ class PidController():
                 return
             logger.info("Forcing process due to changed target_value")
             self._force_reprocess = False
-# update all simple-pid params
+        # update all simple-pid params
         #self.pid.setpoint = self.target_value
         logger.info('Setting PID tunings to ({self.Kproportional}, {self.Kintegral}, {self.Kdifferential})')
         self.pid.tunings = (self.Kproportional, self.Kintegral, self.Kdifferential)
@@ -380,33 +272,10 @@ class PidController():
 
         self.process_new_value(timestamp=this_time, value=float(this_value))
 
-    @property
-    def target_value(self):
-        return self._target_value
-    @target_value.setter
-    def target_value(self, value):
-        self._target_value = value
-        self._integral = 0
-        self._force_reprocess = True
-
-    def set_current(self, value):
-        connection={
-            "broker": "rabbit-broker",
-            "auth-file": "/root/authentications.json"
-        }
-
-        con = Interface(connection)
-        logger.info('going to set new current to: {}'.format(value))
-        reply = con.set(self._set_channel, value)
-        logger.info('set response was: {}'.format(reply))
-    # Use the new sensor reading to adjust the output value
-
-
     # Use the new sensor reading to adjust the output value
     def process_new_value(self, value, timestamp):
-
         # send auto mode state to database
-        self.send_pid_auto_mode_to_db(self.pid_auto_mode)
+
 
         # send setpoint to simple-pid
         self.pid.setpoint = self.target_value
@@ -451,14 +320,8 @@ class PidController():
         self.d_term = self.d_term * (1 - (1-0.01) * (1 / (1 + ((delta/0.05)**6))))
         logger.info(f'd_term has been cut to {self.d_term}')
 
-        # send initial values to database for slowplot
-        self.send_p_term_to_db(self.p_term)
-        self.send_i_term_to_db(self.i_term)
-        self.send_d_term_to_db(self.d_term)
-        self.send_pid_coefficients_to_log(self.Kproportional, self.Kdifferential, self.Kintegral)
-        logger.info('Logged requested p, i, and d_terms')
+        self.write_values_to_file()
 
-        # just to be sure
         self.change_to_current = self.p_term + self.i_term + self.d_term
 
         # reduce the commanded change to B*change_to_current
@@ -483,7 +346,6 @@ class PidController():
             logger.info("current change less than min delta")
             self.change_to_current = 0
             logger.info("old[change] are: {}[{}]".format(self._old_current, self.change_to_current))
-            self.send_change_to_current_to_db(0)
             self._old_pid_auto_mode = self.pid_auto_mode
             self._old_current = self._old_current + self.change_to_current
             self._old_Kp = self.Kproportional
@@ -492,6 +354,7 @@ class PidController():
             self._last_data['time'] = timestamp
             self._last_data['delta'] = delta
             logger.info("Saved values for next run: self._old_current {}, self._old_Kp {}, self._old_Ki {}, self._old_Kd {}, self._last_data['time'] {}".format(self._old_current, self._old_Kp, self._old_Ki, self._old_Kd, self._last_data['time'] ))
+            self.write_values_to_file()
             return
 
 
@@ -582,7 +445,7 @@ class PidController():
         # re-compute the resulting change_to_current
         self.change_to_current = new_current - self._old_current
         # log the final current change
-        self.send_change_to_current_to_db(self.change_to_current)
+        #self.send_change_to_current_to_db(self.change_to_current)
         # send the final, total new_current to the power supply
         if self.pid_auto_mode == 1:
             self.set_current(new_current)
@@ -599,20 +462,7 @@ class PidController():
         if abs(current_get-new_current) < self.tolerance:
             logger.info("current set is equal to current get")
         else:
-            # actual current is not within the acceptable range around the requested value
             self.__validate_status()
-            # Record values and throw an exception
-            # this is the second place the function can return,
-            # so need to save values
-            self._old_pid_auto_mode = self.pid_auto_mode
-            self._old_current = new_current
-            self._old_Kp = self.Kproportional
-            self._old_Ki = self.Kintegral
-            self._old_Kd = self.Kdifferential
-            self._last_data['time'] = timestamp
-            self._last_data['delta'] = delta
-            logger.info("Saved values for next run: self._old_current {}, self._old_Kp {}, self._old_Ki {}, self._old_Kd {}, self._last_data['time'] {}".format(self._old_current, self._old_Kp, self._old_Ki, self._old_Kd, self._last_data['time'] ))
-#            raise exceptions.DriplineValueError("set value ({}) is not equal to checked value ({})".format(new_current,current_get))
 
         # save the old values for the next loop
         # this is the final place the function can return,
@@ -626,60 +476,7 @@ class PidController():
         self._last_data['time'] = timestamp
         self._last_data['delta'] = delta
         logger.info("Saved values for next run: self._old_current {}, self._old_Kp {}, self._old_Ki {}, self._old_Kd {}, self._last_data['time'] {}".format(self._old_current, self._old_Kp, self._old_Ki, self._old_Kd, self._last_data['time'] ))
+        self.write_values_to_file()
 
 
-'''
-#OldVersion
-    def process_new_value(self, value, timestamp):
 
-        delta = self.target_value - value
-        logger.info('value is <{}>; delta is <{}>'.format(value, delta))
-
-        self._integral += delta * (timestamp - self._last_data['time']).total_seconds()
-        if (timestamp - self._last_data['time']).total_seconds() < 2*self.minimum_elapsed_time:
-            try:
-                derivative = (self._last_data['value'] - value) / (timestamp - self._last_data['time']).total_seconds()
-            except TypeError:
-                derivative = 0
-        else:
-            logger.warning("invalid time for calculating derivative")
-            derivative = 0.
-        self._last_data = {'value': value, 'time': timestamp}
-
-        logger.info("proportional <{}>; integral <{}>; differential <{}>".format\
-            (self.Kproportional*delta, self.Kintegral*self._integral, self.Kdifferential*derivative))
-        change_to_current = (self.Kproportional * delta +
-                             self.Kintegral * self._integral +
-                             self.Kdifferential * derivative
-                            )
-        new_current = (self._old_current or 0)*self.enable_offset_term + change_to_current
-
-        if abs(change_to_current) < self.min_current_change:
-            logger.info("current change less than min delta")
-            logger.info("old[new] are: {}[{}]".format(self._old_current,new_current))
-            return
-        logger.info('computed new current to be: {}'.format(new_current))
-        if new_current > self.max_current:
-            logger.info("new current above max")
-            new_current = self.max_current
-        if new_current < self.min_current:
-            logger.info("new current below min")
-            new_current = self.min_current
-        if new_current < 0.:
-            logger.info("new current < 0")
-            new_current = 0.
-
-        self.set_current(new_current)
-        logger.debug("allow settling time and checking the current value")
-        # FIXME: remove sleep when set_and_check handled properly
-        time.sleep(1)
-        current_get = self.__get_current()
-        if abs(current_get-new_current) < self.tolerance:
-            logger.debug("current set is equal to current get")
-        else:
-            self.__validate_status()
-            raise ThrowReply("set value ({}) is not equal to checked value ({})".format(new_current,current_get))
-
-        logger.info("current set is: {}".format(new_current))
-        self._old_current = new_current
-'''
